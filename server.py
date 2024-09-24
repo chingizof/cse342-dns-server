@@ -2,15 +2,17 @@
 from socket import *
 from dnslib import DNSRecord, DNSHeader, RR, QTYPE, RCODE, A, CLASS
 import time
+import logging
 
+logger = logging.getLogger(__name__)
 
 cache = {} # Cache key is the domain name
 upstream_DNS_server_ip = '8.8.8.8' #Gogole's upstream server
 CACHE_TTL = 300  # time for cache to stay
 
-#get raw dns query data, return turple structured
 
 def parse_dns_query(data):
+    #accept raw query and extract key information
     query = DNSRecord.parse(data)
 
     transaction_id = query.header.id
@@ -27,9 +29,11 @@ def parse_dns_query(data):
 
 
 def handler(data, addr, server_socket):
+    #handling a dns query, accept query and return dns packet with answer section
     transaction_id, domain_name, query_type, query_class = parse_dns_query(data)
     current_time = time.time() 
     request = DNSRecord.parse(data)
+    source = "" #used in logging
     
     # Cache key is the domain name
     if domain_name in cache and cache[domain_name][1] > current_time:
@@ -42,6 +46,7 @@ def handler(data, addr, server_socket):
             response.add_answer(RR(domain_name, query_type, rdata=A(ip), ttl=CACHE_TTL))
 
         response = response.pack()
+        source = 'cache'
         print("Cache hit: ", domain_name)
 
 
@@ -66,6 +71,7 @@ def handler(data, addr, server_socket):
             # edit response to have same transaction ID
             upstream_response.header.id = transaction_id
             response = upstream_response.pack()
+            source = 'upstream'
         except timeout:
             #return None
             print("Timed out, too slow broski")
@@ -75,6 +81,7 @@ def handler(data, addr, server_socket):
             upstream_socket.close()
 
     # Send the response back to the client
+    logger.info(f"Domain: {domain_name}, Source: {source}")
     if response:
         server_socket.sendto(response, addr)
     else:
@@ -84,13 +91,16 @@ def handler(data, addr, server_socket):
 def socker_server(ip: str, port: int = 53):
     serv_socket = socket(AF_INET, SOCK_DGRAM)
     serv_socket.bind((ip, port))
+ 
+    logging.basicConfig(filename='dns.log', level=logging.INFO)
+    logger.info('Server started')
 
-    print('The server is ready to receive') 
-
+    print('The server is ready to receive')
     # continuous loop
     while True:
         message, clientAddress = serv_socket.recvfrom(2048)
         handler(message, clientAddress, serv_socket)
+
 
         
 if __name__ == "__main__":
